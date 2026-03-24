@@ -132,10 +132,9 @@ export async function runSetup(config) {
     }
 
     // Only show models that support chat/completions endpoint
-    // Exclude: embeddings, codex, completions-only, image, STT/TTS models
+    // Exclude: embeddings, image, STT/TTS models (but keep codex — works with chat completions)
     const BLOCKED_PATTERNS = [
-      /codex/i, /embedding/i, /instruct/i, /davinci/i, /curie/i,
-      /babbage/i, /ada/i, /whisper/i, /tts/i, /dall-e/i, /text-/i
+      /embedding/i, /babbage/i, /ada/i, /whisper/i, /tts/i, /dall-e/i, /text-davinci/i
     ];
     const CHAT_CAPS = ['chat', 'chat_completions'];
 
