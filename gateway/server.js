@@ -209,7 +209,39 @@ export async function startGateway() {
         }))
       ];
 
-      const response = await fetch('https://api.githubcopilot.com/chat/completions', {
+      // Codex models use /completions with a prompt string, not /chat/completions
+      const isCodex = /codex/i.test(model);
+
+      let endpoint, bodyPayload;
+      if (isCodex) {
+        // Convert messages to a single prompt string for completions endpoint
+        const prompt = allMessages.map(m => {
+          if (m.role === 'system') return `[System]: ${m.content}`;
+          if (m.role === 'user') return `[User]: ${m.content}`;
+          if (m.role === 'assistant') return `[Assistant]: ${m.content}`;
+          return m.content;
+        }).join('\n\n') + '\n\n[Assistant]:';
+
+        endpoint = 'https://api.githubcopilot.com/completions';
+        bodyPayload = {
+          model,
+          prompt,
+          stream: true,
+          temperature: 0.7,
+          max_tokens: 4096
+        };
+      } else {
+        endpoint = 'https://api.githubcopilot.com/chat/completions';
+        bodyPayload = {
+          model,
+          messages: allMessages,
+          stream: true,
+          temperature: 0.7,
+          max_tokens: 4096
+        };
+      }
+
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${copilotToken}`,
@@ -219,13 +251,7 @@ export async function startGateway() {
           'Editor-Plugin-Version': 'copilot-chat/0.12.0',
           'Copilot-Integration-Id': 'vscode-chat'
         },
-        body: JSON.stringify({
-          model,
-          messages: allMessages,
-          stream: true,
-          temperature: 0.7,
-          max_tokens: 4096
-        })
+        body: JSON.stringify(bodyPayload)
       });
 
       if (!response.ok) {
@@ -247,7 +273,11 @@ export async function startGateway() {
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6);
           if (data === '[DONE]') continue;
-          try { fullText += JSON.parse(data).choices?.[0]?.delta?.content || ''; } catch {}
+          try {
+            const parsed = JSON.parse(data);
+            // /chat/completions returns delta.content, /completions returns text
+            fullText += parsed.choices?.[0]?.delta?.content || parsed.choices?.[0]?.text || '';
+          } catch {}
         }
 
         const cleaned = processIdentityUpdates(fullText);
