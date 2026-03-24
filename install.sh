@@ -5,7 +5,8 @@ set -e
 # curl -fsSL https://raw.githubusercontent.com/techzt13/msf/main/install.sh | bash
 
 REPO="techzt13/msf"
-INSTALL_DIR="$HOME/.msf"
+MSF_DATA_DIR="$HOME/.msf"           # user data: config, memory, token, soul
+MSF_CODE_DIR="$HOME/.msf-app"       # code only: bin, gateway, node_modules
 BIN_DIR="$HOME/.local/bin"
 
 # Colors
@@ -42,13 +43,13 @@ fi
 
 echo -e "${GREEN}✓ Node.js $(node -v) detected${NC}"
 
-# Create install directory
-mkdir -p "$INSTALL_DIR"
+# Create directories
+mkdir -p "$MSF_DATA_DIR"   # user data — never overwritten after first install
+mkdir -p "$MSF_CODE_DIR"   # code — always replaced on update
 mkdir -p "$BIN_DIR"
 
 echo -e "${CYAN}→ Downloading MSF...${NC}"
 
-# Download the latest release
 if command -v curl &> /dev/null; then
   curl -fsSL "https://github.com/$REPO/archive/refs/heads/main.tar.gz" -o /tmp/msf.tar.gz
 elif command -v wget &> /dev/null; then
@@ -59,17 +60,21 @@ else
 fi
 
 tar -xzf /tmp/msf.tar.gz -C /tmp/
-cp -r /tmp/msf-main/* "$INSTALL_DIR/"
+
+# Replace code only — never touch ~/.msf/ user data
+rm -rf "$MSF_CODE_DIR"
+mkdir -p "$MSF_CODE_DIR"
+cp -r /tmp/msf-main/* "$MSF_CODE_DIR/"
 rm -rf /tmp/msf.tar.gz /tmp/msf-main
 
 echo -e "${CYAN}→ Installing dependencies...${NC}"
-cd "$INSTALL_DIR"
+cd "$MSF_CODE_DIR"
 npm install --silent
 
-# Create the msf binary
+# Create the msf binary pointing to code dir
 cat > "$BIN_DIR/msf" << 'EOF'
 #!/usr/bin/env bash
-node "$HOME/.msf/bin/msf.js" "$@"
+node "$HOME/.msf-app/bin/msf.js" "$@"
 EOF
 chmod +x "$BIN_DIR/msf"
 
@@ -88,17 +93,22 @@ if [ -n "$SHELL_CONFIG" ] && ! grep -q "$BIN_DIR" "$SHELL_CONFIG" 2>/dev/null; t
   echo -e "${YELLOW}→ Added $BIN_DIR to PATH in $SHELL_CONFIG${NC}"
 fi
 
+export PATH="$BIN_DIR:$PATH"
+
 echo ""
 echo -e "${GREEN}${BOLD}✓ MSF installed successfully!${NC}"
 echo ""
-echo -e "  Run ${CYAN}${BOLD}msf setup${NC} to configure your GitHub Copilot connection."
-echo -e "  Then just type ${CYAN}${BOLD}msf${NC} to launch the gateway."
+echo -e "  Code lives in:   ${CYAN}~/.msf-app/${NC}"
+echo -e "  Your data lives in: ${CYAN}~/.msf/${NC}  ${YELLOW}(never touched on update)${NC}"
 echo ""
 
-# Reload shell path
-export PATH="$BIN_DIR:$PATH"
-
-# Auto-run setup
-echo -e "${YELLOW}Starting setup wizard...${NC}"
-echo ""
-msf setup
+# Only run setup on first install (no config yet)
+if [ ! -f "$MSF_DATA_DIR/config.json" ]; then
+  echo -e "${YELLOW}Starting setup wizard...${NC}"
+  echo ""
+  msf setup
+else
+  echo -e "${GREEN}✓ Existing setup detected — your config, memory and soul are untouched.${NC}"
+  echo -e "  Run ${CYAN}${BOLD}msf${NC} to start."
+  echo ""
+fi
