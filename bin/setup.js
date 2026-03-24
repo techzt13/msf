@@ -131,12 +131,22 @@ export async function runSetup(config) {
       process.exit(1);
     }
 
-    // Only show chat-capable models
+    // Only show models that support chat/completions endpoint
+    // Exclude: embeddings, codex, completions-only, image, STT/TTS models
+    const BLOCKED_PATTERNS = [
+      /codex/i, /embedding/i, /instruct/i, /davinci/i, /curie/i,
+      /babbage/i, /ada/i, /whisper/i, /tts/i, /dall-e/i, /text-/i
+    ];
+    const CHAT_CAPS = ['chat', 'chat_completions'];
+
     modelChoices = available
       .filter(m => {
-        const caps = m.capabilities?.type || m.type || '';
-        // include if it's a chat model or no type specified (assume chat)
-        return !caps || caps === 'chat' || caps.includes('chat');
+        const id = m.id || '';
+        const capType = m.capabilities?.type || m.type || '';
+        // Reject if ID matches a blocked pattern
+        if (BLOCKED_PATTERNS.some(p => p.test(id))) return false;
+        // Accept if explicitly a chat type, or no type specified (assume chat)
+        return !capType || CHAT_CAPS.includes(capType) || capType.includes('chat');
       })
       .map(m => ({
         name: chalk.cyan(m.id) + (m.name && m.name !== m.id ? chalk.dim(` — ${m.name}`) : ''),
@@ -144,7 +154,7 @@ export async function runSetup(config) {
       }));
 
     if (!modelChoices.length) {
-      // All models passed if filter was too strict
+      // Fallback: show all models if filter was too strict
       modelChoices = available.map(m => ({
         name: chalk.cyan(m.id) + (m.name && m.name !== m.id ? chalk.dim(` — ${m.name}`) : ''),
         value: m.id
