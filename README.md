@@ -6,7 +6,7 @@
 
 **Via npm (recommended):**
 ```bash
-npm install -g @msf/msf
+npm install -g @zackt/msf
 msf setup
 ```
 
@@ -37,7 +37,7 @@ msf update
 Or via npm:
 
 ```bash
-npm update -g @msf/msf
+npm update -g @zackt/msf
 ```
 
 This pulls the latest code and reinstalls dependencies. Your personal data is **completely safe** — it lives in `~/.msf/` and is never modified during updates.
