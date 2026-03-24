@@ -3,11 +3,11 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MSF_DATA_DIR = path.join(os.homedir(), '.msf');       // user data
-const MSF_CODE_DIR = path.join(os.homedir(), '.msf-app');   // code
+const MSF_DATA_DIR = path.join(os.homedir(), '.msf');
+const MSF_CODE_DIR = path.join(os.homedir(), '.msf-app');
 const CONFIG_FILE = path.join(MSF_DATA_DIR, 'config.json');
 
 function readConfig() {
@@ -63,6 +63,28 @@ async function main() {
     return;
   }
 
+  // ── msf status ──────────────────────────────────────────────
+  if (command === 'status') {
+    const pidFile = path.join(MSF_DATA_DIR, 'gateway.pid');
+    if (fs.existsSync(pidFile)) {
+      const pid = fs.readFileSync(pidFile, 'utf8').trim();
+      try {
+        process.kill(parseInt(pid), 0); // check if alive
+        const config = readConfig();
+        const port = config?.port || 3000;
+        console.log(chalk.green(`✓ MSF gateway is running (PID ${pid})`));
+        console.log(chalk.dim(`  URL: http://localhost:${port}`));
+      } catch {
+        console.log(chalk.yellow('Gateway PID file exists but process is not running.'));
+        fs.unlinkSync(pidFile);
+      }
+    } else {
+      console.log(chalk.yellow('MSF gateway is not running.'));
+      console.log(chalk.dim('  Start it with: msf start'));
+    }
+    return;
+  }
+
   // ── msf update ──────────────────────────────────────────────
   if (command === 'update') {
     printBanner();
@@ -86,13 +108,11 @@ async function main() {
     } catch (err) {
       spinner.fail(chalk.red('Update failed'));
       console.log(chalk.dim(err.message));
-      console.log(chalk.dim('\nManual update:\n  curl -fsSL https://raw.githubusercontent.com/techzt13/msf/main/install.sh | bash'));
       process.exit(1);
     }
     return;
   }
 
-  // ── msf (start gateway) ──────────────────────────────────────
   const config = readConfig();
   if (!config || !config.setup_complete) {
     printBanner();
@@ -104,20 +124,72 @@ async function main() {
     process.exit(1);
   }
 
-  printBanner();
-  const { startGateway } = await import('../gateway/server.js');
   const port = config.port || 3000;
 
-  fs.writeFileSync(path.join(MSF_DATA_DIR, 'gateway.pid'), String(process.pid));
+  // ── msf start (background daemon) ───────────────────────────
+  if (command === 'start') {
+    const pidFile = path.join(MSF_DATA_DIR, 'gateway.pid');
+
+    // Check if already running
+    if (fs.existsSync(pidFile)) {
+      const existingPid = fs.readFileSync(pidFile, 'utf8').trim();
+      try {
+        process.kill(parseInt(existingPid), 0);
+        console.log(chalk.yellow(`MSF gateway is already running (PID ${existingPid})`));
+        console.log(chalk.dim(`  URL: http://localhost:${port}`));
+        console.log(chalk.dim('  Stop it with: msf stop'));
+        return;
+      } catch {
+        // stale pid, continue
+        fs.unlinkSync(pidFile);
+      }
+    }
+
+    const logFile = path.join(MSF_DATA_DIR, 'gateway.log');
+    const out = fs.openSync(logFile, 'a');
+    const err = fs.openSync(logFile, 'a');
+
+    const child = spawn(process.execPath, [path.join(MSF_CODE_DIR, 'bin', 'msf.js'), '--gateway-only'], {
+      detached: true,
+      stdio: ['ignore', out, err]
+    });
+
+    child.unref();
+    fs.writeFileSync(pidFile, String(child.pid));
+
+    console.log(chalk.green(`✓ MSF gateway started in background (PID ${child.pid})`));
+    console.log(chalk.dim(`  URL:  http://localhost:${port}`));
+    console.log(chalk.dim(`  Logs: ~/.msf/gateway.log`));
+    console.log(chalk.dim('  Stop: msf stop'));
+
+    setTimeout(() => {
+      open(`http://localhost:${port}`);
+    }, 1500);
+    return;
+  }
+
+  // ── msf --gateway-only (internal, used by daemon) ───────────
+  if (command === '--gateway-only') {
+    fs.writeFileSync(path.join(MSF_DATA_DIR, 'gateway.pid'), String(process.pid));
+    const { startGateway } = await import('../gateway/server.js');
+    await startGateway();
+    return;
+  }
+
+  // ── msf (foreground, default) ────────────────────────────────
+  printBanner();
 
   console.log(boxen(
     chalk.green(`✓ ${config.msf_name || 'MSF'} is starting...\n\n`) +
     chalk.white('URL: ') + chalk.cyan(`http://localhost:${port}`) + '\n' +
     chalk.dim('Your data: ~/.msf/\n') +
-    chalk.dim('Press Ctrl+C to stop'),
+    chalk.dim('Press Ctrl+C to stop  |  Run ') + chalk.cyan('msf start') + chalk.dim(' to run in background'),
     { padding: 1, borderColor: 'green', borderStyle: 'round' }
   ));
 
+  fs.writeFileSync(path.join(MSF_DATA_DIR, 'gateway.pid'), String(process.pid));
+
+  const { startGateway } = await import('../gateway/server.js');
   await startGateway();
 
   setTimeout(() => {
