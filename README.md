@@ -4,11 +4,18 @@
 
 ## Install
 
+**Via npm (recommended):**
+```bash
+npm install -g @msf/msf
+msf setup
+```
+
+**Via curl:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/techzt13/msf/main/install.sh | bash
 ```
 
-The installer will walk you through setup automatically on first run.
+Both methods will walk you through setup automatically on first run.
 
 ## Commands
 
@@ -27,7 +34,13 @@ When a new version is available, just run:
 msf update
 ```
 
-This pulls the latest code from GitHub and reinstalls dependencies. Your personal data is **completely safe** — it lives in `~/.msf/` and is never modified during updates.
+Or via npm:
+
+```bash
+npm update -g @msf/msf
+```
+
+This pulls the latest code and reinstalls dependencies. Your personal data is **completely safe** — it lives in `~/.msf/` and is never modified during updates.
 
 ## Where things live
 
@@ -40,22 +53,22 @@ This pulls the latest code from GitHub and reinstalls dependencies. Your persona
   memory.md           ← Things MSF remembers about you
   workspace/          ← Drop files here for MSF to work with
 
-~/.msf-app/           ← App code — replaced on every update
+~/.msf-app/           ← App code — replaced on every update (curl install)
 ```
 
 ## Features
 
 - 🤖 Powered by GitHub Copilot — uses models your account has access to
 - 🧠 Persistent memory — MSF remembers things across conversations
-- 🪪 Identity system — fixed personality with soul.md, user.md, memory.md
-- 🌐 Web search — MSF searches automatically when you ask about current events
+- 🪪 Identity system — personality via soul.md, user.md, memory.md
+- 🌐 Web search — searches automatically when you ask about current events
 - 📁 Workspace — drop files into `~/.msf/workspace/` for MSF to read
 - 🎨 Themes — Dark, Light, Ocean, Forest
 - ⚡ Simple commands — `msf`, `msf stop`, `msf update`
 
 ## Identity & Memory
 
-MSF has a fixed default personality that persists across all conversations. You can customize it at any time just by talking to it:
+MSF has a fixed default personality that persists across all conversations. Customize it just by talking to it:
 
 - **"Remember that I prefer concise answers"** → saved to `memory.md`
 - **"Add to my profile: I'm a developer"** → saved to `user.md`
