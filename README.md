@@ -75,4 +75,4 @@ During setup, MSF fetches the exact list of models available on your GitHub Copi
 
 ## License
 
-MIT
+Proprietary — All Rights Reserved. See [LICENSE](LICENSE) for details.
