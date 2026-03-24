@@ -29,12 +29,60 @@ function readToken() {
   return fs.readFileSync(tokenFile, 'utf8').trim();
 }
 
+async function getCopilotToken() {
+  const githubToken = readToken();
+  const res = await fetch('https://api.github.com/copilot_internal/v2/token', {
+    headers: { 'Authorization': `token ${githubToken}`, 'Accept': 'application/json' }
+  });
+  if (!res.ok) throw new Error('Failed to refresh Copilot token. Run: msf setup');
+  return (await res.json()).token;
+}
+
+// Perform a web search using Bing (available via Copilot's API)
+async function webSearch(query, copilotToken) {
+  try {
+    const res = await fetch(`https://api.githubcopilot.com/search?q=${encodeURIComponent(query)}`, {
+      headers: {
+        'Authorization': `Bearer ${copilotToken}`,
+        'Accept': 'application/json',
+        'Editor-Version': 'vscode/1.85.0',
+        'Copilot-Integration-Id': 'vscode-chat'
+      }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data;
+    }
+  } catch {}
+
+  // Fallback: DuckDuckGo instant answer (no key needed)
+  try {
+    const res = await fetch(
+      `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
+      { headers: { 'Accept': 'application/json' } }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const results = [];
+      if (data.AbstractText) results.push({ title: data.Heading, snippet: data.AbstractText, url: data.AbstractURL });
+      if (data.RelatedTopics) {
+        for (const t of data.RelatedTopics.slice(0, 5)) {
+          if (t.Text) results.push({ snippet: t.Text, url: t.FirstURL });
+        }
+      }
+      return { results };
+    }
+  } catch {}
+
+  return null;
+}
+
 function buildSystemPrompt(msfName, userName) {
   const soul = readFile('soul.md');
   const user = readFile('user.md');
   const memory = readFile('memory.md');
 
-  return `You are ${msfName}, a personal AI assistant.
+  return `You are ${msfName}, a personal AI assistant with web search capability.
 
 ${soul ? `## Your Soul\n${soul}` : ''}
 
@@ -44,17 +92,22 @@ ${memory ? `## Your Memory\n${memory}` : ''}
 
 ---
 
-## Memory Commands
-If the user says "remember that...", "add to your memory...", or similar, append the fact to memory by including this tag at the END of your response:
-[[MEMORY_UPDATE: <fact to remember, written concisely>]]
+## Web Search
+When the user asks about current events, recent news, real-time info, prices, weather, or anything that benefits from up-to-date information, you will receive search results prepended to their message in the format:
+[WEB SEARCH RESULTS for "query": ...]
+Use those results naturally in your answer. Cite sources when relevant.
 
-If the user says "update your soul:" or "change your personality:", include:
+## Memory Commands
+If the user says "remember that...", "add to your memory...", append the fact by including at the END of your response:
+[[MEMORY_UPDATE: <fact, written concisely>]]
+
+If the user says "update your soul:" or "change your personality:":
 [[SOUL_UPDATE: <new trait or instruction>]]
 
-If the user says "update user info:" or "add to my profile:", include:
+If the user says "update user info:" or "add to my profile:":
 [[USER_UPDATE: <info to add>]]
 
-Only include these tags when explicitly asked. Keep them on their own line at the very end. They are processed silently — the user won't see them.`;
+Only include these tags when explicitly asked. They are processed silently.`;
 }
 
 function processIdentityUpdates(text) {
@@ -62,28 +115,25 @@ function processIdentityUpdates(text) {
 
   const memMatch = text.match(/\[\[MEMORY_UPDATE:\s*(.*?)\]\]/s);
   if (memMatch) {
-    const fact = memMatch[1].trim();
     const date = new Date().toISOString().split('T')[0];
     let memory = readFile('memory.md');
-    memory += `\n- [${date}] ${fact}`;
+    memory += `\n- [${date}] ${memMatch[1].trim()}`;
     writeFile('memory.md', memory);
     cleaned = cleaned.replace(memMatch[0], '').trim();
   }
 
   const soulMatch = text.match(/\[\[SOUL_UPDATE:\s*(.*?)\]\]/s);
   if (soulMatch) {
-    const trait = soulMatch[1].trim();
     let soul = readFile('soul.md');
-    soul += `\n\n## Updated Behavior\n- ${trait}`;
+    soul += `\n\n## Updated Behavior\n- ${soulMatch[1].trim()}`;
     writeFile('soul.md', soul);
     cleaned = cleaned.replace(soulMatch[0], '').trim();
   }
 
   const userMatch = text.match(/\[\[USER_UPDATE:\s*(.*?)\]\]/s);
   if (userMatch) {
-    const info = userMatch[1].trim();
     let user = readFile('user.md');
-    user += `\n- ${info}`;
+    user += `\n- ${userMatch[1].trim()}`;
     writeFile('user.md', user);
     cleaned = cleaned.replace(userMatch[0], '').trim();
   }
@@ -91,25 +141,37 @@ function processIdentityUpdates(text) {
   return cleaned;
 }
 
+// Detect if a message needs a web search
+function needsWebSearch(message) {
+  const triggers = [
+    /search (for|the web for)/i,
+    /look up/i,
+    /what('s| is) (the latest|happening|going on|current|today|now)/i,
+    /current(ly)?/i,
+    /latest( news)?/i,
+    /recent(ly)?/i,
+    /today'?s?/i,
+    /right now/i,
+    /news (about|on)/i,
+    /weather/i,
+    /price of/i,
+    /stock price/i,
+    /\b202[4-9]\b/,
+  ];
+  return triggers.some(r => r.test(message));
+}
+
 export async function startGateway() {
   const config = readConfig();
   const port = config.port || 3000;
   const msfName = config.msf_name || 'MSF';
   const userName = config.user_name || 'there';
+  const model = config.model || 'gpt-4o';
 
   const app = express();
   app.use(cors());
   app.use(express.json());
   app.use(express.static(path.join(__dirname, 'public')));
-
-  async function getCopilotToken() {
-    const githubToken = readToken();
-    const res = await fetch('https://api.github.com/copilot_internal/v2/token', {
-      headers: { 'Authorization': `token ${githubToken}`, 'Accept': 'application/json' }
-    });
-    if (!res.ok) throw new Error('Failed to refresh Copilot token. Run: msf setup');
-    return (await res.json()).token;
-  }
 
   // Chat
   app.post('/api/chat', async (req, res) => {
@@ -118,9 +180,30 @@ export async function startGateway() {
       const copilotToken = await getCopilotToken();
       const systemPrompt = buildSystemPrompt(msfName, userName);
 
+      // Check if last user message needs web search
+      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+      let augmentedMessages = [...messages];
+
+      if (lastUserMsg && needsWebSearch(lastUserMsg.content)) {
+        const searchResults = await webSearch(lastUserMsg.content, copilotToken);
+        if (searchResults?.results?.length > 0) {
+          const resultText = searchResults.results
+            .slice(0, 5)
+            .map((r, i) => `${i + 1}. ${r.title ? `**${r.title}**` : ''} ${r.snippet || ''} ${r.url ? `(${r.url})` : ''}`)
+            .join('\n');
+
+          // Prepend search results to the last user message
+          augmentedMessages = messages.map(m =>
+            m === lastUserMsg
+              ? { ...m, content: `[WEB SEARCH RESULTS for "${lastUserMsg.content}":\n${resultText}]\n\n${m.content}` }
+              : m
+          );
+        }
+      }
+
       const allMessages = [
         { role: 'system', content: systemPrompt },
-        ...messages.map(m => ({
+        ...augmentedMessages.map(m => ({
           role: m.role === 'ai' ? 'assistant' : m.role,
           content: m.content
         }))
@@ -137,7 +220,7 @@ export async function startGateway() {
           'Copilot-Integration-Id': 'vscode-chat'
         },
         body: JSON.stringify({
-          model: 'gpt-4o',
+          model,
           messages: allMessages,
           stream: true,
           temperature: 0.7,
@@ -164,9 +247,7 @@ export async function startGateway() {
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6);
           if (data === '[DONE]') continue;
-          try {
-            fullText += JSON.parse(data).choices?.[0]?.delta?.content || '';
-          } catch {}
+          try { fullText += JSON.parse(data).choices?.[0]?.delta?.content || ''; } catch {}
         }
 
         const cleaned = processIdentityUpdates(fullText);
@@ -185,7 +266,7 @@ export async function startGateway() {
     }
   });
 
-  // Config (safe fields only)
+  // Config
   app.get('/api/config', (req, res) => {
     const cfg = readConfig();
     res.json({
@@ -193,26 +274,25 @@ export async function startGateway() {
       msf_name: cfg.msf_name || 'MSF',
       user_name: cfg.user_name || 'there',
       theme: cfg.theme || 'dark',
+      model: cfg.model || 'gpt-4o',
       port: cfg.port || 3000
     });
   });
 
-  // Read identity files
+  // Identity files
   app.get('/api/identity/:file', (req, res) => {
     const allowed = ['soul.md', 'user.md', 'memory.md'];
     if (!allowed.includes(req.params.file)) return res.status(400).json({ error: 'Invalid file' });
     res.json({ content: readFile(req.params.file) });
   });
 
-  // Workspace file listing
+  // Workspace
   app.get('/api/workspace', (req, res) => {
     const wsDir = path.join(MSF_DIR, 'workspace');
     if (!fs.existsSync(wsDir)) return res.json({ files: [] });
-    const files = fs.readdirSync(wsDir).filter(f => !f.startsWith('.'));
-    res.json({ files });
+    res.json({ files: fs.readdirSync(wsDir).filter(f => !f.startsWith('.')) });
   });
 
-  // Read workspace file
   app.get('/api/workspace/:filename', (req, res) => {
     const fp = path.join(MSF_DIR, 'workspace', path.basename(req.params.filename));
     if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not found' });
@@ -221,7 +301,7 @@ export async function startGateway() {
 
   // Health
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', uptime: process.uptime() });
+    res.json({ status: 'ok', uptime: process.uptime(), model });
   });
 
   app.get('*', (req, res) => {
