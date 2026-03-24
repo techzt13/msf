@@ -2,9 +2,9 @@
 set -e
 
 # MSF Installer
-# curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/msf/main/install.sh | bash
+# curl -fsSL https://raw.githubusercontent.com/techzt13/msf/main/install.sh | bash
 
-REPO="YOUR_USERNAME/msf"
+REPO="techzt13/msf"
 INSTALL_DIR="$HOME/.msf"
 BIN_DIR="$HOME/.local/bin"
 
