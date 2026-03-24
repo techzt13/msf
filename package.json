@@ -1,5 +1,5 @@
 {
-  "name": "@msf/msf",
+  "name": "@zackt/msf",
   "version": "1.0.0",
   "description": "My Smart Friend — AI Gateway powered by GitHub Copilot",
   "main": "bin/msf.js",
