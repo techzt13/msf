@@ -1,10 +1,22 @@
 #!/usr/bin/env node
-import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MSF_DIR = path.join(os.homedir(), '.msf');
+const CONFIG_FILE = path.join(MSF_DIR, 'config.json');
+
+function readConfig() {
+  if (!fs.existsSync(CONFIG_FILE)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 const args = process.argv.slice(2);
 const command = args[0];
 
@@ -14,9 +26,6 @@ async function main() {
   const { default: figlet } = await import('figlet');
   const { default: boxen } = await import('boxen');
   const { default: open } = await import('open');
-  const { Conf } = await import('conf');
-
-  const config = new Conf({ projectName: 'msf' });
 
   const printBanner = () => {
     const banner = figlet.textSync('MSF', { font: 'Big' });
@@ -27,12 +36,13 @@ async function main() {
   if (command === 'setup') {
     printBanner();
     const { runSetup } = await import('./setup.js');
-    await runSetup(config);
+    // Pass a dummy config object — setup now writes directly to ~/.msf/
+    await runSetup({ set: () => {}, get: () => {} });
     return;
   }
 
   if (command === 'stop') {
-    const pidFile = path.join(process.env.HOME, '.msf', 'gateway.pid');
+    const pidFile = path.join(MSF_DIR, 'gateway.pid');
     if (fs.existsSync(pidFile)) {
       const pid = fs.readFileSync(pidFile, 'utf8').trim();
       try {
@@ -50,8 +60,8 @@ async function main() {
   }
 
   // Check if configured
-  const token = config.get('copilot_token');
-  if (!token) {
+  const config = readConfig();
+  if (!config || !config.setup_complete) {
     printBanner();
     console.log(boxen(
       chalk.yellow('MSF is not set up yet.\n\n') +
@@ -64,18 +74,21 @@ async function main() {
   // Start gateway
   printBanner();
   const { startGateway } = await import('../gateway/server.js');
-  const port = config.get('port') || 3000;
+  const port = config.port || 3000;
+
+  // Save PID
+  fs.writeFileSync(path.join(MSF_DIR, 'gateway.pid'), String(process.pid));
 
   console.log(boxen(
-    chalk.green('✓ MSF Gateway is starting...\n\n') +
+    chalk.green(`✓ ${config.msf_name || 'MSF'} is starting...\n\n`) +
     chalk.white('URL: ') + chalk.cyan(`http://localhost:${port}`) + '\n' +
+    chalk.dim('~/.msf/ is your config directory\n') +
     chalk.dim('Press Ctrl+C to stop'),
     { padding: 1, borderColor: 'green', borderStyle: 'round' }
   ));
 
-  await startGateway(config);
+  await startGateway();
 
-  // Open browser
   setTimeout(() => {
     open(`http://localhost:${port}`);
   }, 1000);
