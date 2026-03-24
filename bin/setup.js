@@ -82,8 +82,9 @@ export async function runSetup(config) {
     token = pat.trim();
   }
 
-  // Validate Copilot access
+  // Validate Copilot access & fetch available models
   const spinner2 = ora({ text: 'Validating GitHub Copilot access...', color: 'cyan' }).start();
+  let copilotToken = null;
   try {
     const res = await fetch('https://api.github.com/copilot_internal/v2/token', {
       headers: { 'Authorization': `token ${token}`, 'Accept': 'application/json' }
@@ -93,15 +94,60 @@ export async function runSetup(config) {
       console.log(chalk.dim('Make sure your account has an active GitHub Copilot subscription.'));
       process.exit(1);
     }
+    copilotToken = (await res.json()).token;
     spinner2.succeed(chalk.green('GitHub Copilot access confirmed ✓'));
   } catch (err) {
     spinner2.fail(chalk.red('Validation failed: ' + err.message));
     process.exit(1);
   }
 
+  // Fetch available models from Copilot
+  const spinner3 = ora({ text: 'Fetching available models...', color: 'cyan' }).start();
+  let modelChoices = [
+    { name: chalk.green('GPT-4o') + chalk.dim(' — powerful, recommended'), value: 'gpt-4o' },
+    { name: chalk.blue('GPT-4o mini') + chalk.dim(' — faster, lighter'), value: 'gpt-4o-mini' },
+    { name: chalk.magenta('Claude 3.5 Sonnet') + chalk.dim(' — great for writing & analysis'), value: 'claude-3.5-sonnet' },
+    { name: chalk.yellow('o1-mini') + chalk.dim(' — advanced reasoning'), value: 'o1-mini' },
+  ];
+
+  try {
+    const modelsRes = await fetch('https://api.githubcopilot.com/models', {
+      headers: {
+        'Authorization': `Bearer ${copilotToken}`,
+        'Accept': 'application/json',
+        'Editor-Version': 'vscode/1.85.0',
+        'Editor-Plugin-Version': 'copilot-chat/0.12.0',
+        'Copilot-Integration-Id': 'vscode-chat'
+      }
+    });
+    if (modelsRes.ok) {
+      const modelsData = await modelsRes.json();
+      const available = modelsData?.data || modelsData?.models || [];
+      if (available.length > 0) {
+        modelChoices = available.map(m => ({
+          name: chalk.cyan(m.id) + (m.name ? chalk.dim(` — ${m.name}`) : ''),
+          value: m.id
+        }));
+      }
+    }
+    spinner3.succeed(chalk.green('Models loaded'));
+  } catch {
+    spinner3.warn(chalk.yellow('Could not fetch models — using defaults'));
+  }
+
   console.log('');
 
-  // ── Step 2: Gateway config ───────────────────────────────────
+  // ── Step 2: Model selection ──────────────────────────────────
+  const { model } = await inquirer.prompt([{
+    type: 'list',
+    name: 'model',
+    message: chalk.cyan('Which AI model would you like to use?'),
+    choices: modelChoices
+  }]);
+
+  console.log('');
+
+  // ── Step 3: Gateway config ───────────────────────────────────
   const { port } = await inquirer.prompt([{
     type: 'input',
     name: 'port',
@@ -130,7 +176,7 @@ export async function runSetup(config) {
   console.log(chalk.bold.cyan('  ── Identity Setup ──────────────────────────────'));
   console.log(chalk.dim('  MSF has a personality and remembers who you are.\n'));
 
-  // ── Step 3: User identity ────────────────────────────────────
+  // ── Step 4: User & MSF identity ──────────────────────────────
   const { userName } = await inquirer.prompt([{
     type: 'input',
     name: 'userName',
@@ -163,10 +209,11 @@ export async function runSetup(config) {
   // Token stored as a plain file — easy to inspect or rotate
   fs.writeFileSync(path.join(MSF_DIR, 'copilot_token'), token, { mode: 0o600 });
 
-  // Config (no token here)
+  // Config
   const configData = {
     port: parseInt(port),
     theme,
+    model,
     gateway_name: msfName + ' Gateway',
     msf_name: msfName,
     user_name: userName,
@@ -226,16 +273,13 @@ Drop files here and ask ${msfName} to read, summarize, or work with them.
 
   saveSpinner.succeed(chalk.green('~/.msf/ created'));
 
-  // Also save port/theme to the conf store for the CLI to read
-  config.set('msf_dir', MSF_DIR);
-  config.set('setup_complete', true);
-
   console.log('');
   console.log(boxen(
     gradient.rainbow('✓ Setup Complete!') + '\n\n' +
-    chalk.white(`Hi ${chalk.cyan(userName)}! Your AI is named ${chalk.cyan(msfName)}.\n\n`) +
+    chalk.white(`Hi ${chalk.cyan(userName)}! Your AI is named ${chalk.cyan(msfName)}.\n`) +
+    chalk.white(`Model: ${chalk.cyan(model)} · Port: ${chalk.cyan(port)} · Theme: ${chalk.cyan(theme)}\n\n`) +
     chalk.dim('~/.msf/\n') +
-    chalk.dim('  config.json       ← settings\n') +
+    chalk.dim('  config.json       ← settings & model\n') +
     chalk.dim('  copilot_token     ← GitHub Copilot auth\n') +
     chalk.dim('  soul.md           ← personality\n') +
     chalk.dim('  user.md           ← your profile\n') +
