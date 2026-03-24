@@ -209,33 +209,53 @@ export async function startGateway() {
         }))
       ];
 
-      // Codex models (gpt-5.x-codex) use ChatGPT's backend OAuth, not GitHub Copilot.
-      // They are incompatible with the Copilot API entirely.
-      if (/codex/i.test(model)) {
-        return res.status(400).json({
-          error: `The model "${model}" is a Codex model and requires ChatGPT OAuth — it cannot be used via GitHub Copilot. Please change your model in ~/.msf/config.json to a chat model like "gpt-4o" or "claude-sonnet-4-5", then restart MSF.`
-        });
-      }
+      // If a proxy_url is set in config, route through it (e.g. Copilot Proxy VS Code extension)
+      // This allows Codex and other VS Code LM models to work via local proxy
+      const proxyUrl = config.proxy_url;
+      let endpoint, fetchHeaders, bodyPayload;
 
-      const endpoint = 'https://api.githubcopilot.com/chat/completions';
-      const bodyPayload = {
-        model,
-        messages: allMessages,
-        stream: true,
-        temperature: 0.7,
-        max_tokens: 4096
-      };
-
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
+      if (proxyUrl) {
+        // Local proxy (e.g. Copilot Proxy extension at http://localhost:3100/v1)
+        const base = proxyUrl.replace(/\/+$/, '');
+        const apiKey = config.proxy_api_key || 'n/a';
+        endpoint = base.endsWith('/v1')
+          ? `${base}/chat/completions`
+          : `${base}/v1/chat/completions`;
+        fetchHeaders = {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream'
+        };
+        bodyPayload = {
+          model,
+          messages: allMessages,
+          stream: true,
+          temperature: 0.7,
+          max_tokens: 4096
+        };
+      } else {
+        // Default: GitHub Copilot API
+        endpoint = 'https://api.githubcopilot.com/chat/completions';
+        fetchHeaders = {
           'Authorization': `Bearer ${copilotToken}`,
           'Content-Type': 'application/json',
           'Accept': 'text/event-stream',
           'Editor-Version': 'vscode/1.85.0',
           'Editor-Plugin-Version': 'copilot-chat/0.12.0',
           'Copilot-Integration-Id': 'vscode-chat'
-        },
+        };
+        bodyPayload = {
+          model,
+          messages: allMessages,
+          stream: true,
+          temperature: 0.7,
+          max_tokens: 4096
+        };
+      }
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: fetchHeaders,
         body: JSON.stringify(bodyPayload)
       });
 
@@ -291,6 +311,20 @@ export async function startGateway() {
     }
   });
 
+  // Update proxy
+  app.post('/api/config/proxy', (req, res) => {
+    try {
+      const { proxy_url, proxy_api_key } = req.body;
+      const cfg = readConfig();
+      if (proxy_url !== undefined) cfg.proxy_url = proxy_url || null;
+      if (proxy_api_key !== undefined) cfg.proxy_api_key = proxy_api_key || null;
+      fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+      res.json({ ok: true, proxy_url: cfg.proxy_url || null });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Config
   app.get('/api/config', (req, res) => {
     const cfg = readConfig();
@@ -300,7 +334,8 @@ export async function startGateway() {
       user_name: cfg.user_name || 'there',
       theme: cfg.theme || 'dark',
       model: cfg.model || 'gpt-4o',
-      port: cfg.port || 3000
+      port: cfg.port || 3000,
+      proxy_url: cfg.proxy_url || null
     });
   });
 
