@@ -8,24 +8,31 @@ import os from 'os';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MSF_DIR = path.join(os.homedir(), '.msf');
+const CONFIG_FILE = path.join(MSF_DIR, 'config.json');
 
-function readIdentityFile(filename) {
-  const filepath = path.join(MSF_DIR, filename);
-  if (fs.existsSync(filepath)) {
-    return fs.readFileSync(filepath, 'utf8').trim();
-  }
-  return '';
+function readConfig() {
+  return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
 }
 
-function writeIdentityFile(filename, content) {
-  fs.mkdirSync(MSF_DIR, { recursive: true });
+function readFile(filename) {
+  const fp = path.join(MSF_DIR, filename);
+  return fs.existsSync(fp) ? fs.readFileSync(fp, 'utf8').trim() : '';
+}
+
+function writeFile(filename, content) {
   fs.writeFileSync(path.join(MSF_DIR, filename), content, 'utf8');
 }
 
+function readToken() {
+  const tokenFile = path.join(MSF_DIR, 'copilot_token');
+  if (!fs.existsSync(tokenFile)) throw new Error('No Copilot token found. Run: msf setup');
+  return fs.readFileSync(tokenFile, 'utf8').trim();
+}
+
 function buildSystemPrompt(msfName, userName) {
-  const soul = readIdentityFile('soul.md');
-  const user = readIdentityFile('user.md');
-  const memory = readIdentityFile('memory.md');
+  const soul = readFile('soul.md');
+  const user = readFile('user.md');
+  const memory = readFile('memory.md');
 
   return `You are ${msfName}, a personal AI assistant.
 
@@ -38,88 +45,76 @@ ${memory ? `## Your Memory\n${memory}` : ''}
 ---
 
 ## Memory Commands
-If the user says something like "remember that...", "add to your memory...", or "add to memory:", respond normally AND append the fact to your memory by including a special tag at the END of your response (after your normal reply):
+If the user says "remember that...", "add to your memory...", or similar, append the fact to memory by including this tag at the END of your response:
+[[MEMORY_UPDATE: <fact to remember, written concisely>]]
 
-[[MEMORY_UPDATE: <the fact to remember, written concisely>]]
+If the user says "update your soul:" or "change your personality:", include:
+[[SOUL_UPDATE: <new trait or instruction>]]
 
-If the user says "update your soul:" or "change your personality:", respond normally AND include:
+If the user says "update user info:" or "add to my profile:", include:
+[[USER_UPDATE: <info to add>]]
 
-[[SOUL_UPDATE: <the new trait or instruction to append to your soul>]]
-
-If the user says "update user info:" or "add to my profile:", respond normally AND include:
-
-[[USER_UPDATE: <the info to add to the user profile>]]
-
-Only include these tags when explicitly asked. Keep them on their own line at the very end of your response. The UI will handle them silently — the user won't see the raw tags.`;
+Only include these tags when explicitly asked. Keep them on their own line at the very end. They are processed silently — the user won't see them.`;
 }
 
-// Parse and apply identity update tags from AI response
-function processIdentityUpdates(text, msfName) {
+function processIdentityUpdates(text) {
   let cleaned = text;
 
-  // Memory update
   const memMatch = text.match(/\[\[MEMORY_UPDATE:\s*(.*?)\]\]/s);
   if (memMatch) {
     const fact = memMatch[1].trim();
-    let memory = readIdentityFile('memory.md');
     const date = new Date().toISOString().split('T')[0];
+    let memory = readFile('memory.md');
     memory += `\n- [${date}] ${fact}`;
-    writeIdentityFile('memory.md', memory);
+    writeFile('memory.md', memory);
     cleaned = cleaned.replace(memMatch[0], '').trim();
   }
 
-  // Soul update
   const soulMatch = text.match(/\[\[SOUL_UPDATE:\s*(.*?)\]\]/s);
   if (soulMatch) {
     const trait = soulMatch[1].trim();
-    let soul = readIdentityFile('soul.md');
+    let soul = readFile('soul.md');
     soul += `\n\n## Updated Behavior\n- ${trait}`;
-    writeIdentityFile('soul.md', soul);
+    writeFile('soul.md', soul);
     cleaned = cleaned.replace(soulMatch[0], '').trim();
   }
 
-  // User update
   const userMatch = text.match(/\[\[USER_UPDATE:\s*(.*?)\]\]/s);
   if (userMatch) {
     const info = userMatch[1].trim();
-    let user = readIdentityFile('user.md');
+    let user = readFile('user.md');
     user += `\n- ${info}`;
-    writeIdentityFile('user.md', user);
+    writeFile('user.md', user);
     cleaned = cleaned.replace(userMatch[0], '').trim();
   }
 
   return cleaned;
 }
 
-export async function startGateway(config) {
-  const app = express();
-  const port = config.get('port') || 3000;
-  const msfName = config.get('msf_name') || 'MSF';
-  const userName = config.get('user_name') || 'there';
+export async function startGateway() {
+  const config = readConfig();
+  const port = config.port || 3000;
+  const msfName = config.msf_name || 'MSF';
+  const userName = config.user_name || 'there';
 
+  const app = express();
   app.use(cors());
   app.use(express.json());
   app.use(express.static(path.join(__dirname, 'public')));
 
-  // Get a fresh Copilot token (they expire every 30min)
   async function getCopilotToken() {
-    const githubToken = config.get('copilot_token');
+    const githubToken = readToken();
     const res = await fetch('https://api.github.com/copilot_internal/v2/token', {
-      headers: {
-        'Authorization': `token ${githubToken}`,
-        'Accept': 'application/json'
-      }
+      headers: { 'Authorization': `token ${githubToken}`, 'Accept': 'application/json' }
     });
-    if (!res.ok) throw new Error('Failed to get Copilot token — try running msf setup again');
-    const data = await res.json();
-    return data.token;
+    if (!res.ok) throw new Error('Failed to refresh Copilot token. Run: msf setup');
+    return (await res.json()).token;
   }
 
-  // Chat endpoint
+  // Chat
   app.post('/api/chat', async (req, res) => {
     try {
       const { messages } = req.body;
-
       const copilotToken = await getCopilotToken();
       const systemPrompt = buildSystemPrompt(msfName, userName);
 
@@ -155,44 +150,32 @@ export async function startGateway(config) {
         return res.status(response.status).json({ error: err });
       }
 
-      // Buffer the stream, process identity updates, then re-stream
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
-      const reader = response.body;
       let fullText = '';
       const chunks = [];
 
-      reader.on('data', chunk => chunks.push(chunk));
-      reader.on('end', () => {
+      response.body.on('data', chunk => chunks.push(chunk));
+      response.body.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
-        const lines = raw.split('\n');
-
-        // Collect full text
-        for (const line of lines) {
+        for (const line of raw.split('\n')) {
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6);
           if (data === '[DONE]') continue;
           try {
-            const parsed = JSON.parse(data);
-            fullText += parsed.choices?.[0]?.delta?.content || '';
+            fullText += JSON.parse(data).choices?.[0]?.delta?.content || '';
           } catch {}
         }
 
-        // Process identity updates (strip tags from displayed text)
-        const cleanedText = processIdentityUpdates(fullText, msfName);
-
-        // Re-emit as a single SSE chunk with cleaned text
-        const payload = JSON.stringify({
-          choices: [{ delta: { content: cleanedText }, finish_reason: 'stop' }]
-        });
-        res.write(`data: ${payload}\n\n`);
+        const cleaned = processIdentityUpdates(fullText);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: cleaned } }] })}\n\n`);
         res.write('data: [DONE]\n\n');
         res.end();
       });
 
-      reader.on('error', err => {
+      response.body.on('error', err => {
         res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
         res.end();
       });
@@ -202,26 +185,41 @@ export async function startGateway(config) {
     }
   });
 
-  // Config endpoint
+  // Config (safe fields only)
   app.get('/api/config', (req, res) => {
+    const cfg = readConfig();
     res.json({
-      gateway_name: config.get('gateway_name') || 'MSF Gateway',
-      msf_name: msfName,
-      user_name: userName,
-      theme: config.get('theme') || 'dark',
-      port
+      gateway_name: cfg.gateway_name || 'MSF Gateway',
+      msf_name: cfg.msf_name || 'MSF',
+      user_name: cfg.user_name || 'there',
+      theme: cfg.theme || 'dark',
+      port: cfg.port || 3000
     });
   });
 
-  // Identity files endpoint (read)
+  // Read identity files
   app.get('/api/identity/:file', (req, res) => {
     const allowed = ['soul.md', 'user.md', 'memory.md'];
     if (!allowed.includes(req.params.file)) return res.status(400).json({ error: 'Invalid file' });
-    const content = readIdentityFile(req.params.file);
-    res.json({ content });
+    res.json({ content: readFile(req.params.file) });
   });
 
-  // Health check
+  // Workspace file listing
+  app.get('/api/workspace', (req, res) => {
+    const wsDir = path.join(MSF_DIR, 'workspace');
+    if (!fs.existsSync(wsDir)) return res.json({ files: [] });
+    const files = fs.readdirSync(wsDir).filter(f => !f.startsWith('.'));
+    res.json({ files });
+  });
+
+  // Read workspace file
+  app.get('/api/workspace/:filename', (req, res) => {
+    const fp = path.join(MSF_DIR, 'workspace', path.basename(req.params.filename));
+    if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not found' });
+    res.json({ content: fs.readFileSync(fp, 'utf8') });
+  });
+
+  // Health
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', uptime: process.uptime() });
   });
