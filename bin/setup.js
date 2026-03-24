@@ -82,7 +82,7 @@ export async function runSetup(config) {
     token = pat.trim();
   }
 
-  // Validate Copilot access & fetch available models
+  // ── Step 2: Validate Copilot access ─────────────────────────
   const spinner2 = ora({ text: 'Validating GitHub Copilot access...', color: 'cyan' }).start();
   let copilotToken = null;
   try {
@@ -101,14 +101,9 @@ export async function runSetup(config) {
     process.exit(1);
   }
 
-  // Fetch available models from Copilot
-  const spinner3 = ora({ text: 'Fetching available models...', color: 'cyan' }).start();
-  let modelChoices = [
-    { name: chalk.green('GPT-4o') + chalk.dim(' — powerful, recommended'), value: 'gpt-4o' },
-    { name: chalk.blue('GPT-4o mini') + chalk.dim(' — faster, lighter'), value: 'gpt-4o-mini' },
-    { name: chalk.magenta('Claude 3.5 Sonnet') + chalk.dim(' — great for writing & analysis'), value: 'claude-3.5-sonnet' },
-    { name: chalk.yellow('o1-mini') + chalk.dim(' — advanced reasoning'), value: 'o1-mini' },
-  ];
+  // ── Step 3: Fetch available models — hard fail if unavailable ─
+  const spinner3 = ora({ text: 'Fetching available models from your account...', color: 'cyan' }).start();
+  let modelChoices = [];
 
   try {
     const modelsRes = await fetch('https://api.githubcopilot.com/models', {
@@ -120,24 +115,52 @@ export async function runSetup(config) {
         'Copilot-Integration-Id': 'vscode-chat'
       }
     });
-    if (modelsRes.ok) {
-      const modelsData = await modelsRes.json();
-      const available = modelsData?.data || modelsData?.models || [];
-      if (available.length > 0) {
-        modelChoices = available.map(m => ({
-          name: chalk.cyan(m.id) + (m.name ? chalk.dim(` — ${m.name}`) : ''),
-          value: m.id
-        }));
-      }
+
+    if (!modelsRes.ok) {
+      spinner3.fail(chalk.red(`Failed to fetch models (HTTP ${modelsRes.status})`));
+      console.log(chalk.dim('Could not retrieve the models available to your account. Check your Copilot subscription and try again.'));
+      process.exit(1);
     }
-    spinner3.succeed(chalk.green('Models loaded'));
-  } catch {
-    spinner3.warn(chalk.yellow('Could not fetch models — using defaults'));
+
+    const modelsData = await modelsRes.json();
+    const available = modelsData?.data || modelsData?.models || [];
+
+    if (!available.length) {
+      spinner3.fail(chalk.red('No models found on your account'));
+      console.log(chalk.dim('Your GitHub Copilot account returned no available models. Try again or check your subscription.'));
+      process.exit(1);
+    }
+
+    // Only show chat-capable models
+    modelChoices = available
+      .filter(m => {
+        const caps = m.capabilities?.type || m.type || '';
+        // include if it's a chat model or no type specified (assume chat)
+        return !caps || caps === 'chat' || caps.includes('chat');
+      })
+      .map(m => ({
+        name: chalk.cyan(m.id) + (m.name && m.name !== m.id ? chalk.dim(` — ${m.name}`) : ''),
+        value: m.id
+      }));
+
+    if (!modelChoices.length) {
+      // All models passed if filter was too strict
+      modelChoices = available.map(m => ({
+        name: chalk.cyan(m.id) + (m.name && m.name !== m.id ? chalk.dim(` — ${m.name}`) : ''),
+        value: m.id
+      }));
+    }
+
+    spinner3.succeed(chalk.green(`${modelChoices.length} model${modelChoices.length !== 1 ? 's' : ''} available on your account`));
+  } catch (err) {
+    spinner3.fail(chalk.red('Could not fetch models: ' + err.message));
+    console.log(chalk.dim('Check your internet connection and try again.'));
+    process.exit(1);
   }
 
   console.log('');
 
-  // ── Step 2: Model selection ──────────────────────────────────
+  // ── Step 4: Model selection ──────────────────────────────────
   const { model } = await inquirer.prompt([{
     type: 'list',
     name: 'model',
@@ -147,7 +170,7 @@ export async function runSetup(config) {
 
   console.log('');
 
-  // ── Step 3: Gateway config ───────────────────────────────────
+  // ── Step 5: Gateway config ───────────────────────────────────
   const { port } = await inquirer.prompt([{
     type: 'input',
     name: 'port',
@@ -176,7 +199,7 @@ export async function runSetup(config) {
   console.log(chalk.bold.cyan('  ── Identity Setup ──────────────────────────────'));
   console.log(chalk.dim('  MSF has a personality and remembers who you are.\n'));
 
-  // ── Step 4: User & MSF identity ──────────────────────────────
+  // ── Step 6: User & MSF identity ──────────────────────────────
   const { userName } = await inquirer.prompt([{
     type: 'input',
     name: 'userName',
@@ -206,10 +229,8 @@ export async function runSetup(config) {
   fs.mkdirSync(MSF_DIR, { recursive: true });
   fs.mkdirSync(path.join(MSF_DIR, 'workspace'), { recursive: true });
 
-  // Token stored as a plain file — easy to inspect or rotate
   fs.writeFileSync(path.join(MSF_DIR, 'copilot_token'), token, { mode: 0o600 });
 
-  // Config
   const configData = {
     port: parseInt(port),
     theme,
@@ -222,7 +243,6 @@ export async function runSetup(config) {
   };
   fs.writeFileSync(path.join(MSF_DIR, 'config.json'), JSON.stringify(configData, null, 2));
 
-  // soul.md
   fs.writeFileSync(path.join(MSF_DIR, 'soul.md'), `# SOUL
 
 ## Who ${msfName} Is
@@ -246,7 +266,6 @@ export async function runSetup(config) {
 Think of that one friend who's brilliant, easy to talk to, and always follows through. That's ${msfName}.
 `);
 
-  // user.md
   fs.writeFileSync(path.join(MSF_DIR, 'user.md'), `# USER
 
 ## Profile
@@ -259,13 +278,11 @@ ${userBio ? `- **Notes:** ${userBio}` : ''}
 (${msfName} will add things here as it learns about you.)
 `);
 
-  // memory.md
   fs.writeFileSync(path.join(MSF_DIR, 'memory.md'), `# MEMORY
 
 (${msfName} will store important facts here during conversations.)
 `);
 
-  // workspace README
   fs.writeFileSync(path.join(MSF_DIR, 'workspace', 'README.md'), `# ${msfName} Workspace
 
 Drop files here and ask ${msfName} to read, summarize, or work with them.
