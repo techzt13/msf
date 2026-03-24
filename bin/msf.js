@@ -3,10 +3,12 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { execSync } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MSF_DIR = path.join(os.homedir(), '.msf');
-const CONFIG_FILE = path.join(MSF_DIR, 'config.json');
+const MSF_DATA_DIR = path.join(os.homedir(), '.msf');       // user data
+const MSF_CODE_DIR = path.join(os.homedir(), '.msf-app');   // code
+const CONFIG_FILE = path.join(MSF_DATA_DIR, 'config.json');
 
 function readConfig() {
   if (!fs.existsSync(CONFIG_FILE)) return null;
@@ -26,6 +28,7 @@ async function main() {
   const { default: figlet } = await import('figlet');
   const { default: boxen } = await import('boxen');
   const { default: open } = await import('open');
+  const { default: ora } = await import('ora');
 
   const printBanner = () => {
     const banner = figlet.textSync('MSF', { font: 'Big' });
@@ -33,16 +36,17 @@ async function main() {
     console.log(chalk.dim('  My Smart Friend — AI Gateway\n'));
   };
 
+  // ── msf setup ───────────────────────────────────────────────
   if (command === 'setup') {
     printBanner();
     const { runSetup } = await import('./setup.js');
-    // Pass a dummy config object — setup now writes directly to ~/.msf/
     await runSetup({ set: () => {}, get: () => {} });
     return;
   }
 
+  // ── msf stop ────────────────────────────────────────────────
   if (command === 'stop') {
-    const pidFile = path.join(MSF_DIR, 'gateway.pid');
+    const pidFile = path.join(MSF_DATA_DIR, 'gateway.pid');
     if (fs.existsSync(pidFile)) {
       const pid = fs.readFileSync(pidFile, 'utf8').trim();
       try {
@@ -59,7 +63,36 @@ async function main() {
     return;
   }
 
-  // Check if configured
+  // ── msf update ──────────────────────────────────────────────
+  if (command === 'update') {
+    printBanner();
+    console.log(chalk.dim('  Updating MSF code only — ~/.msf/ is never touched.\n'));
+
+    const spinner = ora({ text: 'Fetching latest MSF from GitHub...', color: 'cyan' }).start();
+    try {
+      execSync(
+        'curl -fsSL https://raw.githubusercontent.com/techzt13/msf/main/install.sh | bash',
+        { stdio: 'pipe' }
+      );
+      spinner.succeed(chalk.green('MSF updated successfully ✓'));
+      console.log('');
+      console.log(boxen(
+        chalk.white('MSF is up to date.\n\n') +
+        chalk.dim('Your config, memory, soul, token and workspace\n') +
+        chalk.dim('in ~/.msf/ are completely untouched.\n\n') +
+        chalk.white('Run ') + chalk.cyan('msf') + chalk.white(' to start.'),
+        { padding: 1, borderColor: 'green', borderStyle: 'round' }
+      ));
+    } catch (err) {
+      spinner.fail(chalk.red('Update failed'));
+      console.log(chalk.dim(err.message));
+      console.log(chalk.dim('\nManual update:\n  curl -fsSL https://raw.githubusercontent.com/techzt13/msf/main/install.sh | bash'));
+      process.exit(1);
+    }
+    return;
+  }
+
+  // ── msf (start gateway) ──────────────────────────────────────
   const config = readConfig();
   if (!config || !config.setup_complete) {
     printBanner();
@@ -71,18 +104,16 @@ async function main() {
     process.exit(1);
   }
 
-  // Start gateway
   printBanner();
   const { startGateway } = await import('../gateway/server.js');
   const port = config.port || 3000;
 
-  // Save PID
-  fs.writeFileSync(path.join(MSF_DIR, 'gateway.pid'), String(process.pid));
+  fs.writeFileSync(path.join(MSF_DATA_DIR, 'gateway.pid'), String(process.pid));
 
   console.log(boxen(
     chalk.green(`✓ ${config.msf_name || 'MSF'} is starting...\n\n`) +
     chalk.white('URL: ') + chalk.cyan(`http://localhost:${port}`) + '\n' +
-    chalk.dim('~/.msf/ is your config directory\n') +
+    chalk.dim('Your data: ~/.msf/\n') +
     chalk.dim('Press Ctrl+C to stop'),
     { padding: 1, borderColor: 'green', borderStyle: 'round' }
   ));
