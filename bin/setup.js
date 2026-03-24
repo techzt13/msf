@@ -12,13 +12,13 @@ import path from 'path';
 import os from 'os';
 
 const execAsync = promisify(exec);
-const MSF_DIR = path.join(os.homedir(), '.msf');
+export const MSF_DIR = path.join(os.homedir(), '.msf');
 
 export async function runSetup(config) {
   console.log(boxen(
     gradient.rainbow('Welcome to MSF Setup') + '\n\n' +
-    chalk.white('This wizard will connect MSF to your GitHub Copilot\n') +
-    chalk.white('and configure your personal AI gateway.'),
+    chalk.white('This wizard will configure your personal AI gateway.\n') +
+    chalk.white('Everything is stored in ') + chalk.cyan('~/.msf/'),
     { padding: 1, borderColor: 'cyan', borderStyle: 'double', textAlignment: 'center' }
   ));
 
@@ -145,7 +145,6 @@ export async function runSetup(config) {
     default: ''
   }]);
 
-  // ── Step 4: MSF identity ─────────────────────────────────────
   const { msfName } = await inquirer.prompt([{
     type: 'input',
     name: 'msfName',
@@ -155,22 +154,29 @@ export async function runSetup(config) {
 
   console.log('');
 
-  // ── Save everything ──────────────────────────────────────────
-  const saveSpinner = ora({ text: 'Saving configuration...', color: 'cyan' }).start();
+  // ── Save everything to ~/.msf/ ───────────────────────────────
+  const saveSpinner = ora({ text: 'Setting up ~/.msf/ ...', color: 'cyan' }).start();
 
-  config.set('copilot_token', token);
-  config.set('port', parseInt(port));
-  config.set('theme', theme);
-  config.set('gateway_name', msfName + ' Gateway');
-  config.set('msf_name', msfName);
-  config.set('user_name', userName);
-  config.set('setup_complete', true);
-  config.set('setup_date', new Date().toISOString());
-
-  // Write soul.md
   fs.mkdirSync(MSF_DIR, { recursive: true });
+  fs.mkdirSync(path.join(MSF_DIR, 'workspace'), { recursive: true });
 
-  const soulContent = `# SOUL
+  // Token stored as a plain file — easy to inspect or rotate
+  fs.writeFileSync(path.join(MSF_DIR, 'copilot_token'), token, { mode: 0o600 });
+
+  // Config (no token here)
+  const configData = {
+    port: parseInt(port),
+    theme,
+    gateway_name: msfName + ' Gateway',
+    msf_name: msfName,
+    user_name: userName,
+    setup_complete: true,
+    setup_date: new Date().toISOString()
+  };
+  fs.writeFileSync(path.join(MSF_DIR, 'config.json'), JSON.stringify(configData, null, 2));
+
+  // soul.md
+  fs.writeFileSync(path.join(MSF_DIR, 'soul.md'), `# SOUL
 
 ## Who ${msfName} Is
 
@@ -191,9 +197,10 @@ export async function runSetup(config) {
 ## Vibe
 
 Think of that one friend who's brilliant, easy to talk to, and always follows through. That's ${msfName}.
-`;
+`);
 
-  const userContent = `# USER
+  // user.md
+  fs.writeFileSync(path.join(MSF_DIR, 'user.md'), `# USER
 
 ## Profile
 
@@ -203,28 +210,39 @@ ${userBio ? `- **Notes:** ${userBio}` : ''}
 ## Memory
 
 (${msfName} will add things here as it learns about you.)
-`;
+`);
 
-  const memoryContent = `# MEMORY
+  // memory.md
+  fs.writeFileSync(path.join(MSF_DIR, 'memory.md'), `# MEMORY
 
 (${msfName} will store important facts here during conversations.)
-`;
+`);
 
-  fs.writeFileSync(path.join(MSF_DIR, 'soul.md'), soulContent);
-  fs.writeFileSync(path.join(MSF_DIR, 'user.md'), userContent);
-  fs.writeFileSync(path.join(MSF_DIR, 'memory.md'), memoryContent);
+  // workspace README
+  fs.writeFileSync(path.join(MSF_DIR, 'workspace', 'README.md'), `# ${msfName} Workspace
 
-  saveSpinner.succeed(chalk.green('Configuration saved'));
+Drop files here and ask ${msfName} to read, summarize, or work with them.
+`);
+
+  saveSpinner.succeed(chalk.green('~/.msf/ created'));
+
+  // Also save port/theme to the conf store for the CLI to read
+  config.set('msf_dir', MSF_DIR);
+  config.set('setup_complete', true);
 
   console.log('');
   console.log(boxen(
     gradient.rainbow('✓ Setup Complete!') + '\n\n' +
-    chalk.white(`Hi ${userName}! Your AI is named ${chalk.cyan(msfName)}.\n`) +
-    chalk.white(`Port: ${chalk.cyan(port)} · Theme: ${chalk.cyan(theme)}\n\n`) +
-    chalk.white('Run ') + chalk.cyan('msf') + chalk.white(' to start your gateway.\n') +
-    chalk.dim('In chat, say "remember that..." to update memory.\n') +
-    chalk.dim('Say "update your soul: ..." to tweak personality.'),
-    { padding: 1, borderColor: 'green', borderStyle: 'round', textAlignment: 'center' }
+    chalk.white(`Hi ${chalk.cyan(userName)}! Your AI is named ${chalk.cyan(msfName)}.\n\n`) +
+    chalk.dim('~/.msf/\n') +
+    chalk.dim('  config.json       ← settings\n') +
+    chalk.dim('  copilot_token     ← GitHub Copilot auth\n') +
+    chalk.dim('  soul.md           ← personality\n') +
+    chalk.dim('  user.md           ← your profile\n') +
+    chalk.dim('  memory.md         ← things MSF remembers\n') +
+    chalk.dim('  workspace/        ← your files\n\n') +
+    chalk.white('Run ') + chalk.cyan('msf') + chalk.white(' to start your gateway on port ') + chalk.cyan(port),
+    { padding: 1, borderColor: 'green', borderStyle: 'round' }
   ));
   console.log('');
 }
