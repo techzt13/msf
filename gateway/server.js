@@ -209,37 +209,22 @@ export async function startGateway() {
         }))
       ];
 
-      // Codex models use /completions with a prompt string, not /chat/completions
-      const isCodex = /codex/i.test(model);
-
-      let endpoint, bodyPayload;
-      if (isCodex) {
-        // Convert messages to a single prompt string for completions endpoint
-        const prompt = allMessages.map(m => {
-          if (m.role === 'system') return `[System]: ${m.content}`;
-          if (m.role === 'user') return `[User]: ${m.content}`;
-          if (m.role === 'assistant') return `[Assistant]: ${m.content}`;
-          return m.content;
-        }).join('\n\n') + '\n\n[Assistant]:';
-
-        endpoint = 'https://api.githubcopilot.com/completions';
-        bodyPayload = {
-          model,
-          prompt,
-          stream: true,
-          temperature: 0.7,
-          max_tokens: 4096
-        };
-      } else {
-        endpoint = 'https://api.githubcopilot.com/chat/completions';
-        bodyPayload = {
-          model,
-          messages: allMessages,
-          stream: true,
-          temperature: 0.7,
-          max_tokens: 4096
-        };
+      // Codex models (gpt-5.x-codex) use ChatGPT's backend OAuth, not GitHub Copilot.
+      // They are incompatible with the Copilot API entirely.
+      if (/codex/i.test(model)) {
+        return res.status(400).json({
+          error: `The model "${model}" is a Codex model and requires ChatGPT OAuth — it cannot be used via GitHub Copilot. Please change your model in ~/.msf/config.json to a chat model like "gpt-4o" or "claude-sonnet-4-5", then restart MSF.`
+        });
       }
+
+      const endpoint = 'https://api.githubcopilot.com/chat/completions';
+      const bodyPayload = {
+        model,
+        messages: allMessages,
+        stream: true,
+        temperature: 0.7,
+        max_tokens: 4096
+      };
 
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -273,11 +258,7 @@ export async function startGateway() {
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6);
           if (data === '[DONE]') continue;
-          try {
-            const parsed = JSON.parse(data);
-            // /chat/completions returns delta.content, /completions returns text
-            fullText += parsed.choices?.[0]?.delta?.content || parsed.choices?.[0]?.text || '';
-          } catch {}
+          try { fullText += JSON.parse(data).choices?.[0]?.delta?.content || ''; } catch {}
         }
 
         const cleaned = processIdentityUpdates(fullText);
@@ -291,6 +272,20 @@ export async function startGateway() {
         res.end();
       });
 
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Update model
+  app.post('/api/config/model', (req, res) => {
+    try {
+      const { model } = req.body;
+      if (!model || typeof model !== 'string') return res.status(400).json({ error: 'model required' });
+      const cfg = readConfig();
+      cfg.model = model.trim();
+      fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+      res.json({ ok: true, model: cfg.model });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
