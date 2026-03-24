@@ -5,7 +5,7 @@
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/msf/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/techzt13/msf/main/install.sh | bash
 ```
 
 ## Usage
