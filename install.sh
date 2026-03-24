@@ -106,7 +106,8 @@ echo ""
 if [ ! -f "$MSF_DATA_DIR/config.json" ]; then
   echo -e "${YELLOW}Starting setup wizard...${NC}"
   echo ""
-  msf setup
+  # Redirect stdin from /dev/tty so interactive prompts work when piped via curl | bash
+  exec node "$MSF_CODE_DIR/bin/msf.js" setup < /dev/tty
 else
   echo -e "${GREEN}✓ Existing setup detected — your config, memory and soul are untouched.${NC}"
   echo -e "  Run ${CYAN}${BOLD}msf${NC} to start."
